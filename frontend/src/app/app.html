@@ -1,0 +1,73 @@
+<div class="container">
+  <header class="header">
+    <h1>{{ title }}</h1>
+    <div class="auth-section">
+      <div *ngIf="!isLoggedIn">
+        <button (click)="login()" [disabled]="loading" class="btn btn-primary">
+          {{ loading ? 'Signing in...' : 'Sign in with Microsoft' }}
+        </button>
+      </div>
+      <div *ngIf="isLoggedIn" class="user-info">
+        <span>Welcome, {{ user?.name || user?.username }}</span>
+        <button (click)="logout()" class="btn btn-secondary">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <div *ngIf="error" class="error-message">
+      {{ error }}
+    </div>
+
+    <div *ngIf="loading" class="loading">
+      Loading...
+    </div>
+
+    <div *ngIf="isLoggedIn && !loading" class="files-section">
+      <div class="section-header">
+        <h2>OneDrive Files</h2>
+        <button (click)="loadFiles()" class="btn btn-secondary">Refresh</button>
+      </div>
+
+      <div *ngIf="files.length === 0" class="no-files">
+        No files found in your OneDrive.
+      </div>
+
+      <div *ngIf="files.length > 0" class="files-grid">
+        <div *ngFor="let file of files" class="file-card">
+          <div class="file-info">
+            <div class="file-icon">
+              <span *ngIf="file.isFolder">📁</span>
+              <span *ngIf="!file.isFolder">📄</span>
+            </div>
+            <div class="file-details">
+              <h3>{{ file.name }}</h3>
+              <p>Size: {{ formatFileSize(file.size) }}</p>
+              <p>Modified: {{ file.lastModifiedDateTime | date:'short' }}</p>
+              <p>Type: {{ file.mimeType }}</p>
+            </div>
+          </div>
+
+          <div class="file-actions">
+            <button (click)="downloadFile(file)" class="btn btn-small">Download</button>
+            <button (click)="analyzeFile(file)" class="btn btn-small btn-primary" [disabled]="file.isFolder">
+              Analyze
+            </button>
+          </div>
+
+          <div *ngIf="getFileAnalysis(file.id)" class="analysis-results">
+            <h4>Analysis Results</h4>
+            <div class="analysis-content">
+              <p><strong>Topics:</strong> {{ getFileAnalysis(file.id)?.topics.join(', ') }}</p>
+              <p *ngIf="getFileAnalysis(file.id)?.durationSeconds">
+                <strong>Duration:</strong> {{ formatDuration(getFileAnalysis(file.id)!.durationSeconds!) }}
+              </p>
+              <p><strong>Summary:</strong> {{ getFileAnalysis(file.id)?.summary }}</p>
+              <p><strong>Status:</strong> {{ getFileAnalysis(file.id)?.analysisStatus }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
