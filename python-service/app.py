@@ -6,10 +6,39 @@ import logging
 from werkzeug.utils import secure_filename
 import re
 from collections import Counter
+import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+import numpy as np
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
+
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords')
+
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+except LookupError:
+    nltk.download('averaged_perceptron_tagger')
+
+try:
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
+except LookupError:
+    nltk.download('averaged_perceptron_tagger_eng')
 
 model = whisper.load_model("base")
 
@@ -19,35 +48,138 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def extract_topics_from_text(text):
-    """Extract relevant topics from transcribed text using keyword analysis"""
-    if not text:
+    """Extract relevant topics from transcribed text using AI-based NLP analysis"""
+    if not text or len(text.strip()) < 10:
         return []
     
-    topic_keywords = {
-        'Technology': ['software', 'computer', 'digital', 'technology', 'programming', 'coding', 'development', 'app', 'website', 'data', 'algorithm', 'artificial intelligence', 'machine learning', 'cloud'],
-        'Business': ['business', 'company', 'market', 'sales', 'revenue', 'profit', 'strategy', 'management', 'leadership', 'team', 'organization', 'corporate', 'enterprise'],
-        'Education': ['education', 'learning', 'teaching', 'student', 'course', 'training', 'knowledge', 'skill', 'university', 'school', 'academic', 'study'],
-        'Finance': ['finance', 'money', 'investment', 'budget', 'cost', 'financial', 'accounting', 'banking', 'economy', 'economic', 'capital', 'funding'],
-        'Marketing': ['marketing', 'advertising', 'brand', 'customer', 'promotion', 'campaign', 'social media', 'content', 'engagement', 'audience'],
-        'Project Management': ['project', 'planning', 'timeline', 'deadline', 'milestone', 'task', 'workflow', 'process', 'methodology', 'agile', 'scrum'],
-        'Communication': ['communication', 'meeting', 'presentation', 'discussion', 'collaboration', 'feedback', 'report', 'update', 'announcement'],
-        'Health': ['health', 'medical', 'healthcare', 'wellness', 'fitness', 'nutrition', 'therapy', 'treatment', 'patient', 'doctor'],
-        'Science': ['science', 'research', 'experiment', 'analysis', 'hypothesis', 'theory', 'discovery', 'innovation', 'scientific'],
-        'Entertainment': ['entertainment', 'movie', 'music', 'game', 'sport', 'fun', 'leisure', 'hobby', 'creative', 'art']
+    try:
+        from nltk.corpus import stopwords
+        from nltk.tokenize import word_tokenize, sent_tokenize
+        from nltk import pos_tag
+        
+        stop_words = set(stopwords.words('english'))
+        
+        sentences = sent_tokenize(text)
+        if len(sentences) < 2:
+            return extract_keywords_from_short_text(text)
+        
+        words = word_tokenize(text.lower())
+        
+        important_words = []
+        pos_tags = pos_tag(words)
+        
+        for word, pos in pos_tags:
+            if (word not in stop_words and 
+                len(word) > 2 and 
+                word.isalpha() and
+                pos.startswith(('NN', 'JJ', 'VB'))):  # Nouns, adjectives, verbs
+                important_words.append(word)
+        
+        if len(important_words) < 3:
+            return extract_keywords_from_short_text(text)
+        
+        chunk_size = max(50, len(words) // 5)  # Adaptive chunk size
+        text_chunks = []
+        
+        for i in range(0, len(words), chunk_size):
+            chunk = ' '.join(words[i:i + chunk_size])
+            if len(chunk.strip()) > 10:
+                text_chunks.append(chunk)
+        
+        if len(text_chunks) < 2:
+            text_chunks = sentences[:min(5, len(sentences))]
+        
+        vectorizer = TfidfVectorizer(
+            max_features=20,
+            stop_words='english',
+            ngram_range=(1, 2),  # Include both single words and bigrams
+            min_df=1,
+            max_df=0.8
+        )
+        
+        try:
+            tfidf_matrix = vectorizer.fit_transform(text_chunks)
+            feature_names = vectorizer.get_feature_names_out()
+            
+            mean_scores = np.mean(tfidf_matrix.toarray(), axis=0)
+            
+            top_indices = np.argsort(mean_scores)[::-1][:10]
+            top_terms = [feature_names[i] for i in top_indices if mean_scores[i] > 0]
+            
+            topics = generate_topics_from_terms(top_terms, text)
+            
+            return topics[:5]  # Return top 5 topics
+            
+        except Exception as e:
+            logger.warning(f"TF-IDF analysis failed: {e}, falling back to keyword extraction")
+            return extract_keywords_from_short_text(text)
+            
+    except Exception as e:
+        logger.error(f"Topic extraction failed: {e}")
+        return extract_keywords_from_short_text(text)
+
+def extract_keywords_from_short_text(text):
+    """Fallback method for short texts or when NLP fails"""
+    try:
+        from nltk.corpus import stopwords
+        from nltk.tokenize import word_tokenize
+        
+        stop_words = set(stopwords.words('english'))
+        words = word_tokenize(text.lower())
+        
+        keywords = [word for word in words 
+                   if word not in stop_words 
+                   and len(word) > 3 
+                   and word.isalpha()]
+        
+        word_freq = Counter(keywords)
+        common_words = [word for word, count in word_freq.most_common(10)]
+        
+        topics = []
+        for word in common_words[:5]:
+            topics.append(word.capitalize())
+        
+        return topics if topics else ['General Content']
+        
+    except Exception as e:
+        logger.error(f"Keyword extraction failed: {e}")
+        return ['General Content']
+
+def generate_topics_from_terms(terms, original_text):
+    """Convert extracted terms into meaningful topic labels"""
+    topics = []
+    
+    domain_patterns = {
+        'Technology & Software': ['software', 'technology', 'digital', 'computer', 'programming', 'code', 'development', 'app', 'system', 'data', 'algorithm', 'ai', 'machine learning', 'cloud', 'platform'],
+        'Business & Management': ['business', 'company', 'management', 'strategy', 'market', 'sales', 'revenue', 'team', 'organization', 'leadership', 'corporate', 'enterprise', 'customer'],
+        'Education & Learning': ['education', 'learning', 'teaching', 'training', 'course', 'student', 'knowledge', 'skill', 'university', 'school', 'academic', 'study', 'research'],
+        'Finance & Economics': ['finance', 'financial', 'money', 'investment', 'budget', 'cost', 'economic', 'banking', 'capital', 'funding', 'profit', 'revenue'],
+        'Health & Wellness': ['health', 'medical', 'healthcare', 'wellness', 'fitness', 'nutrition', 'treatment', 'patient', 'doctor', 'therapy', 'medicine'],
+        'Communication & Media': ['communication', 'media', 'presentation', 'discussion', 'meeting', 'social', 'content', 'message', 'information', 'news'],
+        'Project & Process': ['project', 'process', 'planning', 'workflow', 'methodology', 'task', 'timeline', 'milestone', 'agile', 'management'],
+        'Science & Research': ['science', 'research', 'experiment', 'analysis', 'study', 'discovery', 'innovation', 'scientific', 'theory', 'hypothesis']
     }
     
-    text_lower = text.lower()
-    topic_scores = {}
+    text_lower = original_text.lower()
     
-    for topic, keywords in topic_keywords.items():
-        score = 0
-        for keyword in keywords:
-            score += text_lower.count(keyword)
-        if score > 0:
-            topic_scores[topic] = score
+    for domain, keywords in domain_patterns.items():
+        score = sum(1 for keyword in keywords if keyword in text_lower)
+        if score >= 2:  # At least 2 domain keywords found
+            topics.append(domain)
     
-    sorted_topics = sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)
-    return [topic for topic, score in sorted_topics[:3]]
+    for term in terms[:3]:
+        if len(term) > 2 and term not in [t.lower() for t in topics]:
+            clean_term = ' '.join(word.capitalize() for word in term.split())
+            topics.append(clean_term)
+    
+    seen = set()
+    unique_topics = []
+    for topic in topics:
+        if topic.lower() not in seen:
+            seen.add(topic.lower())
+            unique_topics.append(topic)
+    
+    return unique_topics[:5] if unique_topics else ['General Content']
 
 @app.route('/health', methods=['GET'])
 def health_check():
