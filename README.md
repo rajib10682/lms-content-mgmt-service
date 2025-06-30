@@ -33,7 +33,7 @@ A full-stack application that authenticates with Azure AD, accesses OneDrive fil
 
 - Node.js 18+ and npm/yarn
 - Java 11+
-- Python 3.8+
+- Python 3.9+ (tested and compatible with Python 3.13.5)
 - Azure AD App Registration
 
 ### 1. Azure AD Configuration
