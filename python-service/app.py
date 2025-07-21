@@ -281,7 +281,7 @@ def analyze_video():
                 return jsonify({'error': 'Video file does not contain an audio track'}), 400
             
             audio_temp_path = os.path.join(temp_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
-            video_clip.audio.write_audiofile(audio_temp_path, verbose=False, logger=None)
+            video_clip.audio.write_audiofile(audio_temp_path, logger=None)
             video_clip.close()
             
             logger.info("Audio extraction completed, starting transcription with whisper...")
