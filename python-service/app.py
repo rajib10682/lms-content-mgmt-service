@@ -86,7 +86,8 @@ def safe_embedding_models_load():
         models['bertopic'] = BERTopic()
         logger.info("Successfully loaded BERTopic model")
     except Exception as e:
-        logger.warning(f"Failed to load BERTopic: {e}")
+        logger.warning(f"Failed to load BERTopic (this is optional): {e}")
+        logger.info("BERTopic requires hdbscan which needs build tools. See INSTALLATION.md for alternatives.")
         models['bertopic'] = None
     
     return models
