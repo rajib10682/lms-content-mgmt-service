@@ -61,6 +61,36 @@ def safe_whisper_load(model_name="base", max_retries=3):
                 logger.error(f"Failed to load Whisper model after {max_retries} attempts")
                 raise
 
+def safe_embedding_models_load():
+    """Safely load embedding models with error handling"""
+    models = {}
+    
+    try:
+        from sentence_transformers import SentenceTransformer
+        models['sentence_transformer'] = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Successfully loaded SentenceTransformer model")
+    except Exception as e:
+        logger.warning(f"Failed to load SentenceTransformer: {e}")
+        models['sentence_transformer'] = None
+    
+    try:
+        from keybert import KeyBERT
+        models['keybert'] = KeyBERT()
+        logger.info("Successfully loaded KeyBERT model")
+    except Exception as e:
+        logger.warning(f"Failed to load KeyBERT: {e}")
+        models['keybert'] = None
+    
+    try:
+        from bertopic import BERTopic
+        models['bertopic'] = BERTopic()
+        logger.info("Successfully loaded BERTopic model")
+    except Exception as e:
+        logger.warning(f"Failed to load BERTopic: {e}")
+        models['bertopic'] = None
+    
+    return models
+
 configure_ssl_context()
 
 nltk_resources = [
@@ -85,16 +115,108 @@ except Exception as e:
     logger.error(f"Critical error: Could not load Whisper model: {e}")
     model = None
 
+embedding_models = safe_embedding_models_load()
+
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'm4v', 'wmv'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def extract_topics_with_keybert(text, model):
+    """Extract topics using KeyBERT"""
+    try:
+        keywords = model.extract_keywords(text, keyphrase_ngram_range=(1, 2), 
+                                        stop_words='english')
+        topics = [keyword.title() for keyword, score in keywords[:5]]
+        return topics if topics else []
+    except Exception as e:
+        logger.warning(f"KeyBERT topic extraction failed: {e}")
+        return []
+
+def extract_topics_with_bertopic(text, model):
+    """Extract topics using BERTopic"""
+    try:
+        from nltk.tokenize import sent_tokenize
+        sentences = sent_tokenize(text)
+        if len(sentences) < 2:
+            return []
+        
+        topics, probs = model.fit_transform(sentences)
+        topic_info = model.get_topic_info()
+        
+        valid_topics = topic_info[topic_info.Topic != -1].head(5)
+        topic_names = []
+        for _, row in valid_topics.iterrows():
+            topic_words = model.get_topic(row.Topic)[:3]  # Top 3 words
+            topic_name = ' '.join([word for word, _ in topic_words]).title()
+            topic_names.append(topic_name)
+        
+        return topic_names if topic_names else []
+    except Exception as e:
+        logger.warning(f"BERTopic topic extraction failed: {e}")
+        return []
+
+def extract_topics_with_openai_embeddings(text):
+    """Extract topics using OpenAI embeddings (if API key available)"""
+    try:
+        import openai
+        import os
+        
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            logger.info("OpenAI API key not found, skipping OpenAI embeddings")
+            return []
+        
+        client = openai.OpenAI(api_key=api_key)
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Extract 3-5 main topics from the following text. Return only topic names separated by commas, no explanations."},
+                {"role": "user", "content": text[:2000]}  # Limit text length
+            ],
+            max_tokens=100,
+            temperature=0.3
+        )
+        
+        topics_text = response.choices[0].message.content.strip()
+        topics = [topic.strip().title() for topic in topics_text.split(',')]
+        return topics[:5] if topics else []
+        
+    except Exception as e:
+        logger.warning(f"OpenAI embeddings topic extraction failed: {e}")
+        return []
+
 def extract_topics_from_text(text):
-    """Extract relevant topics from transcribed text using AI-based NLP analysis"""
+    """Extract relevant topics from transcribed text using advanced embedding methods with fallbacks"""
     if not text or len(text.strip()) < 10:
         return []
     
+    logger.info("Starting topic extraction with embedding methods")
+    
+    
+    topics = extract_topics_with_openai_embeddings(text)
+    if topics:
+        logger.info(f"Successfully extracted topics using OpenAI: {topics}")
+        return topics
+    
+    if embedding_models.get('keybert'):
+        topics = extract_topics_with_keybert(text, embedding_models['keybert'])
+        if topics:
+            logger.info(f"Successfully extracted topics using KeyBERT: {topics}")
+            return topics
+    
+    if embedding_models.get('bertopic') and len(text.split()) > 50:
+        topics = extract_topics_with_bertopic(text, embedding_models['bertopic'])
+        if topics:
+            logger.info(f"Successfully extracted topics using BERTopic: {topics}")
+            return topics
+    
+    logger.info("Falling back to NLTK/TF-IDF topic extraction")
+    return extract_topics_from_text_nltk(text)
+
+def extract_topics_from_text_nltk(text):
+    """Original NLTK/TF-IDF topic extraction method (renamed for clarity)"""
     try:
         from nltk.corpus import stopwords
         from nltk.tokenize import word_tokenize, sent_tokenize
@@ -226,6 +348,7 @@ def generate_topics_from_terms(terms, original_text):
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    global model
     status = {
         'status': 'healthy' if model is not None else 'degraded',
         'service': 'whisper-analyzer',
@@ -247,10 +370,16 @@ def health_check():
     
     status['nltk_resources'] = nltk_status
     
+    embedding_status = {}
+    for model_name, model in embedding_models.items():
+        embedding_status[model_name] = 'loaded' if model is not None else 'failed_to_load'
+    status['embedding_models'] = embedding_status
+    
     return jsonify(status)
 
 @app.route('/analyze-video', methods=['POST'])
 def analyze_video():
+    global model
     try:
         if model is None:
             return jsonify({'error': 'Whisper model not available. Please check server logs for SSL/network issues.'}), 503

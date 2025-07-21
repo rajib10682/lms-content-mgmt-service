@@ -124,12 +124,17 @@ def test_nltk_resources():
         return False
 
 def test_topic_extraction():
-    """Test the AI-based topic extraction functionality"""
-    print("\nTesting AI-based topic extraction...")
+    """Test the AI-based topic extraction functionality including embeddings"""
+    print("\nTesting AI-based topic extraction with embeddings...")
     
     try:
         sys.path.insert(0, os.path.dirname(__file__))
-        from app import extract_topics_from_text
+        from app import extract_topics_from_text, embedding_models
+        
+        print(f"Embedding models loaded: {list(embedding_models.keys())}")
+        for model_name, model in embedding_models.items():
+            status = "✓ loaded" if model is not None else "✗ failed"
+            print(f"  {model_name}: {status}")
         
         test_cases = [
             {
