@@ -2,7 +2,7 @@
 
 import sys
 import subprocess
-import pkg_resources
+import importlib.metadata
 import tempfile
 import os
 
@@ -30,6 +30,29 @@ def test_dependency_installation():
     except Exception as e:
         print(f"✗ Error testing dependency installation: {e}")
         return False
+
+def test_installed_packages():
+    """Test that required packages are properly installed"""
+    print("\nTesting installed packages...")
+    
+    required_packages = [
+        'flask', 'openai-whisper', 'torch', 'torchaudio', 
+        'werkzeug', 'numpy', 'nltk', 'scikit-learn', 'spacy', 'numba'
+    ]
+    
+    all_passed = True
+    for package in required_packages:
+        try:
+            version = importlib.metadata.version(package)
+            print(f"✓ {package} version {version} is installed")
+        except importlib.metadata.PackageNotFoundError:
+            print(f"✗ {package} is not installed")
+            all_passed = False
+        except Exception as e:
+            print(f"✗ Error checking {package}: {e}")
+            all_passed = False
+    
+    return all_passed
 
 def test_imports():
     """Test that all critical imports work"""
@@ -187,6 +210,7 @@ if __name__ == "__main__":
     
     tests = [
         ("Dependency Installation", test_dependency_installation),
+        ("Installed Packages", test_installed_packages),
         ("Critical Imports", test_imports),
         ("NLTK Resources", test_nltk_resources),
         ("Topic Extraction", test_topic_extraction),
