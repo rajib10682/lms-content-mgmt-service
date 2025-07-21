@@ -34,12 +34,39 @@ def configure_ssl_context():
         except ImportError:
             pass
         
+        try:
+            import huggingface_hub
+            huggingface_hub.constants.HF_HUB_DISABLE_TELEMETRY = True
+            import huggingface_hub.utils
+            if hasattr(huggingface_hub.utils, '_http_backoff'):
+                original_session = huggingface_hub.utils._http_backoff
+                def patched_session(*args, **kwargs):
+                    session = original_session(*args, **kwargs)
+                    session.verify = False
+                    return session
+                huggingface_hub.utils._http_backoff = patched_session
+        except (ImportError, AttributeError):
+            pass
+        
+        try:
+            import sentence_transformers.util
+            if hasattr(sentence_transformers.util, 'http_get'):
+                original_http_get = sentence_transformers.util.http_get
+                def patched_http_get(url, *args, **kwargs):
+                    kwargs['verify'] = False
+                    return original_http_get(url, *args, **kwargs)
+                sentence_transformers.util.http_get = patched_http_get
+        except (ImportError, AttributeError):
+            pass
+        
         import os
         os.environ['PYTHONHTTPSVERIFY'] = '0'
         os.environ['CURL_CA_BUNDLE'] = ''
         os.environ['REQUESTS_CA_BUNDLE'] = ''
+        os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+        os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
         
-        logger.info("SSL context configured for Python 3.13 compatibility with multiple HTTP libraries")
+        logger.info("SSL context configured for Python 3.13 compatibility with multiple HTTP libraries including huggingface_hub")
     except Exception as e:
         logger.warning(f"Could not configure SSL context: {e}")
 
