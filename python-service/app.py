@@ -20,14 +20,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def configure_ssl_context():
-    """Configure SSL context to handle SSL issues in Python 3.13"""
+    """Configure SSL context to handle SSL issues in Python 3.13 and multiple HTTP libraries"""
     try:
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         
         ssl._create_default_https_context = lambda: ssl_context
-        logger.info("SSL context configured for Python 3.13 compatibility")
+        
+        try:
+            import requests
+            requests.packages.urllib3.disable_warnings()
+        except ImportError:
+            pass
+        
+        import os
+        os.environ['PYTHONHTTPSVERIFY'] = '0'
+        os.environ['CURL_CA_BUNDLE'] = ''
+        os.environ['REQUESTS_CA_BUNDLE'] = ''
+        
+        logger.info("SSL context configured for Python 3.13 compatibility with multiple HTTP libraries")
     except Exception as e:
         logger.warning(f"Could not configure SSL context: {e}")
 
@@ -168,7 +180,14 @@ def extract_topics_with_openai_embeddings(text):
             logger.info("OpenAI API key not found, skipping OpenAI embeddings")
             return []
         
-        client = openai.OpenAI(api_key=api_key)
+        try:
+            import httpx
+            client = openai.OpenAI(
+                api_key=api_key,
+                http_client=httpx.Client(verify=False)
+            )
+        except ImportError:
+            client = openai.OpenAI(api_key=api_key)
         
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -354,7 +373,8 @@ def health_check():
         'status': 'healthy' if model is not None else 'degraded',
         'service': 'whisper-analyzer',
         'whisper_model': 'loaded' if model is not None else 'failed_to_load',
-        'ssl_configured': True
+        'ssl_configured': True,
+        'ssl_verification_disabled': True
     }
     
     nltk_status = {}

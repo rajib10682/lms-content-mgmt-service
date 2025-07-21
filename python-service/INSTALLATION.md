@@ -74,6 +74,26 @@ Copy `.env.example` to `.env` and configure:
 OPENAI_API_KEY=your_api_key_here
 ```
 
+## SSL Certificate Issues
+
+If you encounter SSL certificate verification errors:
+
+**"certificate verify failed: unable to get local issuer certificate"**
+- The application automatically disables SSL verification for compatibility
+- This affects OpenAI API calls, model downloads, and NLTK resources
+- No manual configuration needed - handled automatically
+
+**Corporate Network Issues:**
+- SSL verification is disabled by default for corporate environments
+- If you need to enable SSL verification, modify the `configure_ssl_context()` function
+- Consider using corporate certificate bundles if required by your organization
+
+**Environment Variables:**
+The application sets these automatically:
+- `PYTHONHTTPSVERIFY=0`
+- `CURL_CA_BUNDLE=''`
+- `REQUESTS_CA_BUNDLE=''`
+
 ## Testing Installation
 
 ```bash
