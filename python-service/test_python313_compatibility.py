@@ -37,7 +37,7 @@ def test_installed_packages():
     
     required_packages = [
         'flask', 'openai-whisper', 'torch', 'torchaudio', 
-        'werkzeug', 'numpy', 'nltk', 'scikit-learn', 'spacy', 'numba'
+        'werkzeug', 'numpy', 'nltk', 'scikit-learn', 'spacy', 'numba', 'moviepy'
     ]
     
     all_passed = True
@@ -67,7 +67,8 @@ def test_imports():
         ('numpy', 'array'),
         ('nltk', 'download'),
         ('sklearn.feature_extraction.text', 'TfidfVectorizer'),
-        ('spacy', 'load')
+        ('spacy', 'load'),
+        ('moviepy', 'VideoFileClip')
     ]
     
     all_passed = True

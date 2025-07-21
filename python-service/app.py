@@ -10,6 +10,7 @@ import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 import numpy as np
+from moviepy import VideoFileClip
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -206,7 +207,20 @@ def analyze_video():
         logger.info(f"Processing video file: {filename}")
         
         try:
-            result = model.transcribe(temp_file_path)
+            logger.info("Extracting audio from video using moviepy...")
+            video_clip = VideoFileClip(temp_file_path)
+            
+            if video_clip.audio is None:
+                video_clip.close()
+                return jsonify({'error': 'Video file does not contain an audio track'}), 400
+            
+            audio_temp_path = os.path.join(temp_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
+            video_clip.audio.write_audiofile(audio_temp_path, verbose=False, logger=None)
+            video_clip.close()
+            
+            logger.info("Audio extraction completed, starting transcription with whisper...")
+            
+            result = model.transcribe(audio_temp_path)
             transcribed_text = result["text"]
             
             topics = extract_topics_from_text(transcribed_text)
@@ -231,7 +245,13 @@ def analyze_video():
             
         finally:
             try:
-                os.remove(temp_file_path)
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                
+                audio_temp_path = os.path.join(temp_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
+                if os.path.exists(audio_temp_path):
+                    os.remove(audio_temp_path)
+                
                 os.rmdir(temp_dir)
             except Exception as e:
                 logger.warning(f"Failed to clean up temporary files: {e}")
