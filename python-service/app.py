@@ -11,37 +11,79 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 import numpy as np
 from moviepy import VideoFileClip
+import ssl
+import urllib.request
+import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
+def configure_ssl_context():
+    """Configure SSL context to handle SSL issues in Python 3.13"""
+    try:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        ssl._create_default_https_context = lambda: ssl_context
+        logger.info("SSL context configured for Python 3.13 compatibility")
+    except Exception as e:
+        logger.warning(f"Could not configure SSL context: {e}")
+
+def safe_nltk_download(resource_name, max_retries=3):
+    """Safely download NLTK resources with retry logic and SSL handling"""
+    for attempt in range(max_retries):
+        try:
+            nltk.download(resource_name, quiet=True)
+            logger.info(f"Successfully downloaded NLTK resource: {resource_name}")
+            return True
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed to download {resource_name}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                logger.error(f"Failed to download {resource_name} after {max_retries} attempts")
+                return False
+
+def safe_whisper_load(model_name="base", max_retries=3):
+    """Safely load Whisper model with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            model = whisper.load_model(model_name)
+            logger.info(f"Successfully loaded Whisper model: {model_name}")
+            return model
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed to load Whisper model: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                logger.error(f"Failed to load Whisper model after {max_retries} attempts")
+                raise
+
+configure_ssl_context()
+
+nltk_resources = [
+    ('tokenizers/punkt', 'punkt'),
+    ('tokenizers/punkt_tab', 'punkt_tab'),
+    ('corpora/stopwords', 'stopwords'),
+    ('taggers/averaged_perceptron_tagger', 'averaged_perceptron_tagger'),
+    ('taggers/averaged_perceptron_tagger_eng', 'averaged_perceptron_tagger_eng')
+]
+
+for resource_path, resource_name in nltk_resources:
+    try:
+        nltk.data.find(resource_path)
+        logger.info(f"NLTK resource {resource_name} already available")
+    except LookupError:
+        logger.info(f"Downloading NLTK resource: {resource_name}")
+        safe_nltk_download(resource_name)
 
 try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt_tab')
-
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-
-try:
-    nltk.data.find('taggers/averaged_perceptron_tagger')
-except LookupError:
-    nltk.download('averaged_perceptron_tagger')
-
-try:
-    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
-except LookupError:
-    nltk.download('averaged_perceptron_tagger_eng')
-
-model = whisper.load_model("base")
+    model = safe_whisper_load("base")
+except Exception as e:
+    logger.error(f"Critical error: Could not load Whisper model: {e}")
+    model = None
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'm4v', 'wmv'}
 
@@ -184,11 +226,35 @@ def generate_topics_from_terms(terms, original_text):
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'healthy', 'service': 'whisper-analyzer'})
+    status = {
+        'status': 'healthy' if model is not None else 'degraded',
+        'service': 'whisper-analyzer',
+        'whisper_model': 'loaded' if model is not None else 'failed_to_load',
+        'ssl_configured': True
+    }
+    
+    nltk_status = {}
+    for resource_path, resource_name in [
+        ('tokenizers/punkt', 'punkt'),
+        ('corpora/stopwords', 'stopwords'),
+        ('taggers/averaged_perceptron_tagger', 'pos_tagger')
+    ]:
+        try:
+            nltk.data.find(resource_path)
+            nltk_status[resource_name] = 'available'
+        except LookupError:
+            nltk_status[resource_name] = 'missing'
+    
+    status['nltk_resources'] = nltk_status
+    
+    return jsonify(status)
 
 @app.route('/analyze-video', methods=['POST'])
 def analyze_video():
     try:
+        if model is None:
+            return jsonify({'error': 'Whisper model not available. Please check server logs for SSL/network issues.'}), 503
+        
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
         
