@@ -33,8 +33,36 @@ pip install bertopic
 #### Option 3: Platform-Specific Build Tools
 
 **Windows:**
-1. Install Microsoft Visual C++ Build Tools from https://visualstudio.microsoft.com/downloads/
-2. Then run: `pip install -r requirements.txt`
+
+**Option 3a: Complete Visual Studio Build Tools (Recommended)**
+1. Download Visual Studio Build Tools from https://visualstudio.microsoft.com/downloads/
+2. During installation, select:
+   - **C++ build tools** workload
+   - **Windows 10/11 SDK** (latest version)
+   - **MSVC v143 - VS 2022 C++ x64/x86 build tools**
+3. Restart your command prompt/PowerShell
+4. Then run: `pip install -r requirements.txt`
+
+**Option 3b: Visual Studio Community (Alternative)**
+1. Install Visual Studio Community from https://visualstudio.microsoft.com/vs/community/
+2. During installation, select:
+   - **Desktop development with C++** workload
+   - Ensure **Windows SDK** is included
+3. Restart your command prompt/PowerShell
+4. Then run: `pip install -r requirements.txt`
+
+**Option 3c: Fix Missing Windows SDK Headers**
+If you get `Cannot open include file: 'io.h'` error:
+1. Open Visual Studio Installer
+2. Modify your installation
+3. Add **Windows 10/11 SDK** component
+4. Restart and try again
+
+**Option 3d: Use Developer Command Prompt**
+1. Search for "Developer Command Prompt for VS 2022" in Start Menu
+2. Run as Administrator
+3. Navigate to your project directory
+4. Run: `pip install -r requirements.txt`
 
 **Linux/Ubuntu:**
 ```bash
@@ -108,7 +136,23 @@ sudo apt-get install python3-dev
 ```
 
 **"Microsoft Visual C++ 14.0 is required"** (Windows):
-Install Visual Studio Build Tools or Visual Studio Community
+Install Visual Studio Build Tools or Visual Studio Community (see Option 3 above)
+
+**"Cannot open include file: 'io.h'"** (Windows):
+- Missing Windows SDK headers
+- Install Windows 10/11 SDK via Visual Studio Installer
+- Use Developer Command Prompt for VS 2022
+- See Option 3c above for detailed steps
 
 **"LINK : fatal error LNK1327"** (Windows):
 Use conda installation method (Option 2 above)
+
+**"cl.exe failed with exit code 2"** (Windows):
+- Incomplete Visual Studio Build Tools installation
+- Missing Windows SDK components
+- Try Option 3a or 3b above for complete installation
+
+**"fatal error C1083"** (Windows):
+- Missing system headers (io.h, stdio.h, etc.)
+- Install complete Windows SDK via Visual Studio Installer
+- Ensure both C++ build tools AND Windows SDK are installed
