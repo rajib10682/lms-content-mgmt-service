@@ -279,8 +279,47 @@ def safe_embedding_models_load():
     
     try:
         from keybert import KeyBERT
+        import requests
+        import urllib3
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        session = requests.Session()
+        session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        original_get = requests.get
+        original_post = requests.post
+        
+        def patched_get(*args, **kwargs):
+            kwargs['verify'] = False
+            kwargs['timeout'] = kwargs.get('timeout', 30)
+            return original_get(*args, **kwargs)
+        
+        def patched_post(*args, **kwargs):
+            kwargs['verify'] = False
+            kwargs['timeout'] = kwargs.get('timeout', 30)
+            return original_post(*args, **kwargs)
+        
+        requests.get = patched_get
+        requests.post = patched_post
+        
+        # Initialize KeyBERT with SSL-disabled sentence transformer
         models['keybert'] = KeyBERT()
-        logger.info("Successfully loaded KeyBERT model")
+        
+        requests.get = original_get
+        requests.post = original_post
+        
+        logger.info("Successfully loaded KeyBERT model with SSL bypass")
     except Exception as e:
         logger.warning(f"Failed to load KeyBERT: {e}")
         models['keybert'] = None
