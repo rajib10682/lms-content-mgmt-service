@@ -518,12 +518,15 @@ def analyze_video():
                 return jsonify({'error': f'Audio file is not readable: {str(e)}'}), 500
             
             transcription_attempts = []
+            transcription_success = False
             
             try:
                 logger.info("Attempt 1: Direct path transcription")
+                logger.info(f"Direct path: {audio_temp_path}")
                 result = model.transcribe(audio_temp_path)
                 transcribed_text = result["text"]
                 logger.info("Direct path transcription completed successfully")
+                transcription_success = True
             except Exception as e:
                 transcription_attempts.append(f"Direct path failed: {str(e)}")
                 logger.warning(f"Direct path transcription failed: {e}")
@@ -535,88 +538,88 @@ def analyze_video():
                     result = model.transcribe(abs_path)
                     transcribed_text = result["text"]
                     logger.info("Absolute path transcription completed successfully")
+                    transcription_success = True
                 except Exception as e2:
                     transcription_attempts.append(f"Absolute path failed: {str(e2)}")
                     logger.warning(f"Absolute path transcription failed: {e2}")
                     
-                    if os.name == 'nt':
+                    if not transcription_success and os.name == 'nt':
                         try:
-                            logger.info("Attempt 3: Windows short path")
-                            import ctypes
-                            from ctypes import wintypes
-                            
-                            GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
-                            GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-                            GetShortPathNameW.restype = wintypes.DWORD
-                            
-                            buffer_size = 1000
-                            buffer = ctypes.create_unicode_buffer(buffer_size)
-                            ret = GetShortPathNameW(abs_path, buffer, buffer_size)
-                            
-                            if ret:
-                                short_path = buffer.value
-                                logger.info(f"Short path: {short_path}")
-                                result = model.transcribe(short_path)
-                                transcribed_text = result["text"]
-                                logger.info("Short path transcription completed successfully")
-                            else:
-                                raise Exception("Could not get short path")
-                                
+                            logger.info("Attempt 3: Windows absolute path with forward slashes")
+                            forward_slash_path = abs_path.replace('\\', '/')
+                            logger.info(f"Forward slash path: {forward_slash_path}")
+                            result = model.transcribe(forward_slash_path)
+                            transcribed_text = result["text"]
+                            logger.info("Forward slash path transcription completed successfully")
+                            transcription_success = True
                         except Exception as e3:
-                            transcription_attempts.append(f"Short path failed: {str(e3)}")
-                            logger.warning(f"Short path transcription failed: {e3}")
+                            transcription_attempts.append(f"Forward slash path failed: {str(e3)}")
+                            logger.warning(f"Forward slash path transcription failed: {e3}")
                             
                             try:
-                                logger.info("Attempt 4: Copy to simple temp file")
-                                import tempfile
-                                import shutil
+                                logger.info("Attempt 4: Windows short path")
+                                import ctypes
+                                from ctypes import wintypes
                                 
-                                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                                    simple_temp_path = temp_file.name
+                                GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+                                GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+                                GetShortPathNameW.restype = wintypes.DWORD
                                 
-                                logger.info(f"Copying to simple temp path: {simple_temp_path}")
-                                shutil.copy2(audio_temp_path, simple_temp_path)
+                                buffer_size = 1000
+                                buffer = ctypes.create_unicode_buffer(buffer_size)
+                                ret = GetShortPathNameW(abs_path, buffer, buffer_size)
                                 
-                                result = model.transcribe(simple_temp_path)
-                                transcribed_text = result["text"]
-                                logger.info("Simple temp file transcription completed successfully")
-                                
-                                try:
-                                    os.unlink(simple_temp_path)
-                                except:
-                                    pass
+                                if ret:
+                                    short_path = buffer.value
+                                    logger.info(f"Short path: {short_path}")
+                                    result = model.transcribe(short_path)
+                                    transcribed_text = result["text"]
+                                    logger.info("Short path transcription completed successfully")
+                                    transcription_success = True
+                                else:
+                                    raise Exception("Could not get short path")
                                     
                             except Exception as e4:
-                                transcription_attempts.append(f"Simple temp file failed: {str(e4)}")
-                                logger.error(f"All transcription attempts failed")
-                                logger.error(f"Attempts: {'; '.join(transcription_attempts)}")
-                                return jsonify({'error': f'Transcription failed after multiple attempts: {"; ".join(transcription_attempts)}'}), 500
-                    else:
+                                transcription_attempts.append(f"Short path failed: {str(e4)}")
+                                logger.warning(f"Short path transcription failed: {e4}")
+                    
+                    if not transcription_success:
                         try:
-                            logger.info("Attempt 3: Copy to simple temp file")
+                            logger.info("Attempt 5: Copy to system temp directory with simple name")
                             import tempfile
                             import shutil
                             
-                            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                                simple_temp_path = temp_file.name
+                            temp_dir = tempfile.gettempdir()
+                            simple_temp_path = os.path.join(temp_dir, f"whisper_audio_{os.getpid()}.wav")
                             
-                            logger.info(f"Copying to simple temp path: {simple_temp_path}")
-                            shutil.copy2(audio_temp_path, simple_temp_path)
+                            logger.info(f"Copying {os.path.getsize(audio_temp_path)} bytes to: {simple_temp_path}")
+                            
+                            with open(audio_temp_path, 'rb') as src, open(simple_temp_path, 'wb') as dst:
+                                shutil.copyfileobj(src, dst, 1024*1024)
+                            
+                            logger.info(f"Copy completed. Temp file size: {os.path.getsize(simple_temp_path)} bytes")
                             
                             result = model.transcribe(simple_temp_path)
                             transcribed_text = result["text"]
-                            logger.info("Simple temp file transcription completed successfully")
+                            logger.info("Temp file transcription completed successfully")
+                            transcription_success = True
                             
                             try:
                                 os.unlink(simple_temp_path)
-                            except:
-                                pass
+                                logger.info("Temp file cleaned up successfully")
+                            except Exception as cleanup_error:
+                                logger.warning(f"Failed to clean up temp file: {cleanup_error}")
                                 
-                        except Exception as e3:
-                            transcription_attempts.append(f"Simple temp file failed: {str(e3)}")
-                            logger.error(f"All transcription attempts failed")
-                            logger.error(f"Attempts: {'; '.join(transcription_attempts)}")
-                            return jsonify({'error': f'Transcription failed after multiple attempts: {"; ".join(transcription_attempts)}'}), 500
+                        except Exception as e5:
+                            transcription_attempts.append(f"Temp file copy failed: {str(e5)}")
+                            logger.error(f"Temp file copy transcription failed: {e5}")
+            
+            if not transcription_success:
+                logger.error(f"All transcription attempts failed for file: {audio_temp_path}")
+                logger.error(f"File exists: {os.path.exists(audio_temp_path)}")
+                logger.error(f"File size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
+                logger.error(f"Attempts made: {'; '.join(transcription_attempts)}")
+                return jsonify({'error': f'Transcription failed after multiple attempts: {"; ".join(transcription_attempts)}'}), 500
             
             topics = extract_topics_from_text(transcribed_text)
             
