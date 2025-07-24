@@ -132,8 +132,8 @@ def test_topic_extraction():
         from app import extract_topics_from_text, embedding_models
         
         print(f"Embedding models loaded: {list(embedding_models.keys())}")
-        for model_name, model in embedding_models.items():
-            status = "✓ loaded" if model is not None else "✗ failed"
+        for model_name, embedding_model in embedding_models.items():
+            status = "✓ loaded" if embedding_model is not None else "✗ failed"
             print(f"  {model_name}: {status}")
         
         test_cases = [

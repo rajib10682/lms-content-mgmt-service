@@ -419,8 +419,8 @@ def health_check():
     status['nltk_resources'] = nltk_status
     
     embedding_status = {}
-    for model_name, model in embedding_models.items():
-        embedding_status[model_name] = 'loaded' if model is not None else 'failed_to_load'
+    for model_name, embedding_model in embedding_models.items():
+        embedding_status[model_name] = 'loaded' if embedding_model is not None else 'failed_to_load'
     status['embedding_models'] = embedding_status
     
     return jsonify(status)

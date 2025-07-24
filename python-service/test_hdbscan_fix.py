@@ -16,8 +16,8 @@ def test_flask_application():
         return False
     
     print("\nEmbedding models status:")
-    for model_name, model in embedding_models.items():
-        status = 'loaded' if model is not None else 'failed_to_load'
+    for model_name, embedding_model in embedding_models.items():
+        status = 'loaded' if embedding_model is not None else 'failed_to_load'
         print(f"  {model_name}: {status}")
     
     try:
