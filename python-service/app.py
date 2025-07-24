@@ -14,6 +14,10 @@ from moviepy import VideoFileClip
 import ssl
 import urllib.request
 import time
+import subprocess
+import shutil
+import wave
+import math
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -100,13 +104,174 @@ def safe_whisper_load(model_name="base", max_retries=3):
                 logger.error(f"Failed to load Whisper model after {max_retries} attempts")
                 raise
 
+def chunk_large_audio_file(audio_path, chunk_duration_seconds=30, max_file_size_mb=5):
+    """
+    Chunk large audio files into smaller segments for Whisper processing
+    
+    Args:
+        audio_path: Path to the audio file
+        chunk_duration_seconds: Duration of each chunk in seconds (default: 5 minutes)
+        max_file_size_mb: Maximum file size in MB before chunking (default: 100MB)
+    
+    Returns:
+        List of chunk file paths, or [audio_path] if no chunking needed
+    """
+    try:
+        file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        logger.info(f"Audio file size: {file_size_mb:.1f}MB")
+        
+        if file_size_mb <= max_file_size_mb:
+            logger.info(f"File size ({file_size_mb:.1f}MB) is within limit ({max_file_size_mb}MB), no chunking needed")
+            return [audio_path]
+        
+        logger.info(f"File size ({file_size_mb:.1f}MB) exceeds limit ({max_file_size_mb}MB), chunking into {chunk_duration_seconds}s segments")
+        
+        cmd = [
+            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+            "-of", "csv=p=0", audio_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            logger.warning(f"Could not get audio duration: {result.stderr}")
+            return [audio_path]  # Fallback to original file
+        
+        total_duration = float(result.stdout.strip())
+        logger.info(f"Total audio duration: {total_duration:.1f} seconds")
+        
+        num_chunks = math.ceil(total_duration / chunk_duration_seconds)
+        logger.info(f"Creating {num_chunks} chunks of {chunk_duration_seconds}s each")
+        
+        chunk_paths = []
+        temp_dir = os.path.dirname(audio_path)
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+        
+        for i in range(num_chunks):
+            start_time = i * chunk_duration_seconds
+            chunk_path = os.path.join(temp_dir, f"{base_name}_chunk_{i+1:03d}.wav")
+            
+            chunk_cmd = [
+                "ffmpeg", "-y", "-i", audio_path,
+                "-ss", str(start_time),
+                "-t", str(chunk_duration_seconds),
+                "-c", "copy",
+                chunk_path
+            ]
+            
+            logger.info(f"Creating chunk {i+1}/{num_chunks}: {start_time}s-{start_time + chunk_duration_seconds}s")
+            
+            chunk_result = subprocess.run(chunk_cmd, capture_output=True, timeout=120)
+            if chunk_result.returncode == 0:
+                chunk_size_mb = os.path.getsize(chunk_path) / (1024 * 1024)
+                logger.info(f"Chunk {i+1} created: {chunk_size_mb:.1f}MB")
+                chunk_paths.append(chunk_path)
+            else:
+                logger.warning(f"Failed to create chunk {i+1}: {chunk_result.stderr.decode()}")
+        
+        if chunk_paths:
+            logger.info(f"Successfully created {len(chunk_paths)} audio chunks")
+            return chunk_paths
+        else:
+            logger.warning("No chunks created, falling back to original file")
+            return [audio_path]
+            
+    except Exception as e:
+        logger.error(f"Error chunking audio file: {e}")
+        return [audio_path]  # Fallback to original file
+
+def transcribe_with_chunking(model, audio_path, max_file_size_mb=100):
+    """
+    Transcribe audio with automatic chunking for large files
+    
+    Args:
+        model: Whisper model instance
+        audio_path: Path to audio file
+        max_file_size_mb: Maximum file size before chunking
+    
+    Returns:
+        Combined transcription result
+    """
+    try:
+        chunk_paths = chunk_large_audio_file(audio_path, max_file_size_mb=max_file_size_mb)
+        
+        if len(chunk_paths) == 1:
+            logger.info("Transcribing single file (no chunking)")
+            return model.transcribe(chunk_paths[0])
+        
+        logger.info(f"Transcribing {len(chunk_paths)} chunks")
+        combined_text = ""
+        total_duration = 0
+        chunk_results = []
+        
+        for i, chunk_path in enumerate(chunk_paths):
+            try:
+                logger.info(f"Transcribing chunk {i+1}/{len(chunk_paths)}: {os.path.basename(chunk_path)}")
+                
+                chunk_result = model.transcribe(chunk_path)
+                
+                chunk_text = chunk_result.get("text", "").strip()
+                chunk_duration = chunk_result.get("duration", 0)
+                
+                if chunk_text:
+                    combined_text += chunk_text + " "
+                    
+                total_duration += chunk_duration
+                chunk_results.append(chunk_result)
+                
+                logger.info(f"Chunk {i+1} completed: {len(chunk_text)} characters, {chunk_duration:.1f}s")
+                
+            except Exception as chunk_error:
+                logger.warning(f"Failed to transcribe chunk {i+1}: {chunk_error}")
+                continue
+        
+        for chunk_path in chunk_paths:
+            if chunk_path != audio_path:  # Don't delete the original file
+                try:
+                    os.unlink(chunk_path)
+                    logger.info(f"Cleaned up chunk: {os.path.basename(chunk_path)}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up chunk {chunk_path}: {cleanup_error}")
+        
+        combined_result = {
+            "text": combined_text.strip(),
+            "duration": total_duration,
+            "language": chunk_results[0].get("language", "en") if chunk_results else "en"
+        }
+        
+        logger.info(f"Combined transcription completed: {len(combined_text)} characters, {total_duration:.1f}s total duration")
+        return combined_result
+        
+    except Exception as e:
+        logger.error(f"Error in chunked transcription: {e}")
+        logger.info("Falling back to direct transcription")
+        return model.transcribe(audio_path)
+
 def safe_embedding_models_load():
-    """Safely load embedding models with error handling"""
+    """Safely load embedding models with enhanced SSL configuration"""
     models = {}
+    
+    import os
+    import ssl
+    import urllib3
+    
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    os.environ['CURL_CA_BUNDLE'] = ''
+    os.environ['REQUESTS_CA_BUNDLE'] = ''
+    os.environ['PYTHONHTTPSVERIFY'] = '0'
+    
+    try:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        ssl._create_default_https_context = lambda: ssl_context
+    except Exception as ssl_error:
+        logger.warning(f"Could not configure SSL context for embedding models: {ssl_error}")
     
     try:
         from sentence_transformers import SentenceTransformer
-        models['sentence_transformer'] = SentenceTransformer('all-MiniLM-L6-v2')
+        import requests
+        requests.packages.urllib3.disable_warnings()
+        models['sentence_transformer'] = SentenceTransformer('all-MiniLM-L6-v2', trust_remote_code=True)
         logger.info("Successfully loaded SentenceTransformer model")
     except Exception as e:
         logger.warning(f"Failed to load SentenceTransformer: {e}")
@@ -122,7 +287,9 @@ def safe_embedding_models_load():
     
     try:
         from bertopic import BERTopic
-        models['bertopic'] = BERTopic()
+        import torch
+        torch.hub.set_dir('/tmp/torch_cache')  # Use temp directory for model cache
+        models['bertopic'] = BERTopic(verbose=True)
         logger.info("Successfully loaded BERTopic model")
     except Exception as e:
         logger.warning(f"Failed to load BERTopic (this is optional): {e}")
@@ -517,109 +684,68 @@ def analyze_video():
                 logger.error(f"File is not readable by Python: {e}")
                 return jsonify({'error': f'Audio file is not readable: {str(e)}'}), 500
             
-            transcription_attempts = []
-            transcription_success = False
+            logger.info("Starting Whisper transcription with chunking support for large files")
+            logger.info(f"Audio file: {audio_temp_path}")
+            logger.info(f"File exists: {os.path.exists(audio_temp_path)}")
+            logger.info(f"File size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
             
             try:
-                logger.info("Attempt 1: Direct path transcription")
-                logger.info(f"Direct path: {audio_temp_path}")
-                result = model.transcribe(audio_temp_path)
+                result = transcribe_with_chunking(model, audio_temp_path, max_file_size_mb=5)
                 transcribed_text = result["text"]
-                logger.info("Direct path transcription completed successfully")
-                transcription_success = True
+                logger.info(f"Transcription completed successfully: {len(transcribed_text)} characters")
+                
             except Exception as e:
-                transcription_attempts.append(f"Direct path failed: {str(e)}")
-                logger.warning(f"Direct path transcription failed: {e}")
+                logger.error(f"Chunked transcription failed: {e}")
+                
+                transcription_attempts = []
+                transcription_success = False
                 
                 try:
-                    logger.info("Attempt 2: Absolute path normalization")
-                    abs_path = os.path.abspath(audio_temp_path)
-                    logger.info(f"Absolute path: {abs_path}")
-                    result = model.transcribe(abs_path)
+                    logger.info("Fallback 1: Direct path transcription")
+                    result = model.transcribe(audio_temp_path)
                     transcribed_text = result["text"]
-                    logger.info("Absolute path transcription completed successfully")
+                    logger.info("Direct path transcription completed successfully")
                     transcription_success = True
-                except Exception as e2:
-                    transcription_attempts.append(f"Absolute path failed: {str(e2)}")
-                    logger.warning(f"Absolute path transcription failed: {e2}")
+                except Exception as e1:
+                    transcription_attempts.append(f"Direct path failed: {str(e1)}")
+                    logger.warning(f"Direct path transcription failed: {e1}")
                     
-                    if not transcription_success and os.name == 'nt':
+                    try:
+                        logger.info("Fallback 2: Copy to system temp directory")
+                        import tempfile
+                        import shutil
+                        
+                        temp_dir = tempfile.gettempdir()
+                        simple_temp_path = os.path.join(temp_dir, f"whisper_audio_{os.getpid()}.wav")
+                        
+                        logger.info(f"Copying {os.path.getsize(audio_temp_path)} bytes to: {simple_temp_path}")
+                        
+                        with open(audio_temp_path, 'rb') as src, open(simple_temp_path, 'wb') as dst:
+                            shutil.copyfileobj(src, dst, 1024*1024)
+                        
+                        logger.info(f"Copy completed. Temp file size: {os.path.getsize(simple_temp_path)} bytes")
+                        
+                        result = model.transcribe(simple_temp_path)
+                        transcribed_text = result["text"]
+                        logger.info("Temp file transcription completed successfully")
+                        transcription_success = True
+                        
                         try:
-                            logger.info("Attempt 3: Windows absolute path with forward slashes")
-                            forward_slash_path = abs_path.replace('\\', '/')
-                            logger.info(f"Forward slash path: {forward_slash_path}")
-                            result = model.transcribe(forward_slash_path)
-                            transcribed_text = result["text"]
-                            logger.info("Forward slash path transcription completed successfully")
-                            transcription_success = True
-                        except Exception as e3:
-                            transcription_attempts.append(f"Forward slash path failed: {str(e3)}")
-                            logger.warning(f"Forward slash path transcription failed: {e3}")
+                            os.unlink(simple_temp_path)
+                            logger.info("Temp file cleaned up successfully")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to clean up temp file: {cleanup_error}")
                             
-                            try:
-                                logger.info("Attempt 4: Windows short path")
-                                import ctypes
-                                from ctypes import wintypes
-                                
-                                GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
-                                GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-                                GetShortPathNameW.restype = wintypes.DWORD
-                                
-                                buffer_size = 1000
-                                buffer = ctypes.create_unicode_buffer(buffer_size)
-                                ret = GetShortPathNameW(abs_path, buffer, buffer_size)
-                                
-                                if ret:
-                                    short_path = buffer.value
-                                    logger.info(f"Short path: {short_path}")
-                                    result = model.transcribe(short_path)
-                                    transcribed_text = result["text"]
-                                    logger.info("Short path transcription completed successfully")
-                                    transcription_success = True
-                                else:
-                                    raise Exception("Could not get short path")
-                                    
-                            except Exception as e4:
-                                transcription_attempts.append(f"Short path failed: {str(e4)}")
-                                logger.warning(f"Short path transcription failed: {e4}")
-                    
-                    if not transcription_success:
-                        try:
-                            logger.info("Attempt 5: Copy to system temp directory with simple name")
-                            import tempfile
-                            import shutil
-                            
-                            temp_dir = tempfile.gettempdir()
-                            simple_temp_path = os.path.join(temp_dir, f"whisper_audio_{os.getpid()}.wav")
-                            
-                            logger.info(f"Copying {os.path.getsize(audio_temp_path)} bytes to: {simple_temp_path}")
-                            
-                            with open(audio_temp_path, 'rb') as src, open(simple_temp_path, 'wb') as dst:
-                                shutil.copyfileobj(src, dst, 1024*1024)
-                            
-                            logger.info(f"Copy completed. Temp file size: {os.path.getsize(simple_temp_path)} bytes")
-                            
-                            result = model.transcribe(simple_temp_path)
-                            transcribed_text = result["text"]
-                            logger.info("Temp file transcription completed successfully")
-                            transcription_success = True
-                            
-                            try:
-                                os.unlink(simple_temp_path)
-                                logger.info("Temp file cleaned up successfully")
-                            except Exception as cleanup_error:
-                                logger.warning(f"Failed to clean up temp file: {cleanup_error}")
-                                
-                        except Exception as e5:
-                            transcription_attempts.append(f"Temp file copy failed: {str(e5)}")
-                            logger.error(f"Temp file copy transcription failed: {e5}")
-            
-            if not transcription_success:
-                logger.error(f"All transcription attempts failed for file: {audio_temp_path}")
-                logger.error(f"File exists: {os.path.exists(audio_temp_path)}")
-                logger.error(f"File size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
-                logger.error(f"Attempts made: {'; '.join(transcription_attempts)}")
-                return jsonify({'error': f'Transcription failed after multiple attempts: {"; ".join(transcription_attempts)}'}), 500
+                    except Exception as e2:
+                        transcription_attempts.append(f"Temp file copy failed: {str(e2)}")
+                        logger.error(f"Temp file copy transcription failed: {e2}")
+                
+                if not transcription_success:
+                    logger.error(f"All transcription attempts failed for file: {audio_temp_path}")
+                    logger.error(f"File exists: {os.path.exists(audio_temp_path)}")
+                    logger.error(f"File size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
+                    logger.error(f"Attempts made: {'; '.join(transcription_attempts)}")
+                    return jsonify({'error': f'Transcription failed after multiple attempts: {"; ".join(transcription_attempts)}'}), 500
             
             topics = extract_topics_from_text(transcribed_text)
             
