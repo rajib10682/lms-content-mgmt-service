@@ -443,8 +443,11 @@ def analyze_video():
             return jsonify({'error': 'File type not supported'}), 400
         
         filename = secure_filename(file.filename)
-        temp_dir = tempfile.mkdtemp()
-        temp_file_path = os.path.join(temp_dir, filename)
+        storage_dir = r"C:\Ankit"
+        
+        os.makedirs(storage_dir, exist_ok=True)
+        
+        temp_file_path = os.path.join(storage_dir, filename)
         file.save(temp_file_path)
         
         logger.info(f"Processing video file: {filename}")
@@ -457,7 +460,7 @@ def analyze_video():
                 video_clip.close()
                 return jsonify({'error': 'Video file does not contain an audio track'}), 400
             
-            audio_temp_path = os.path.join(temp_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
+            audio_temp_path = os.path.join(storage_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
             video_clip.audio.write_audiofile(audio_temp_path, logger=None)
             video_clip.close()
             
@@ -488,16 +491,12 @@ def analyze_video():
             
         finally:
             try:
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
-                
-                audio_temp_path = os.path.join(temp_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
-                if os.path.exists(audio_temp_path):
-                    os.remove(audio_temp_path)
-                
-                os.rmdir(temp_dir)
+                logger.info(f"Video and audio files stored in: {storage_dir}")
+                logger.info(f"Video file: {temp_file_path}")
+                if 'audio_temp_path' in locals():
+                    logger.info(f"Audio file: {audio_temp_path}")
             except Exception as e:
-                logger.warning(f"Failed to clean up temporary files: {e}")
+                logger.warning(f"Failed to log file locations: {e}")
     
     except Exception as e:
         logger.error(f"Error analyzing video: {str(e)}")
