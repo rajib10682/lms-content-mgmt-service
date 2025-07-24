@@ -368,26 +368,50 @@ ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'm4v', 'wmv'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def extract_topics_with_keybert(text, model):
-    """Extract topics using KeyBERT"""
+def extract_topics_with_keybert(text, model, encoded_data=None):
+    """Extract topics using KeyBERT with optional pre-computed sentence transformer embeddings"""
     try:
-        keywords = model.extract_keywords(text, keyphrase_ngram_range=(1, 2), 
-                                        stop_words='english')
+        if encoded_data and encoded_data.get('embeddings') is not None:
+            logger.info("Using pre-computed sentence transformer embeddings for KeyBERT")
+            keywords = model.extract_keywords(
+                text, 
+                keyphrase_ngram_range=(1, 2), 
+                stop_words='english',
+                doc_embeddings=encoded_data['embeddings']
+            )
+        else:
+            logger.info("Using text-based approach for KeyBERT (no pre-computed embeddings)")
+            keywords = model.extract_keywords(text, keyphrase_ngram_range=(1, 2), 
+                                            stop_words='english')
+        
         topics = [keyword.title() for keyword, score in keywords[:5]]
         return topics if topics else []
     except Exception as e:
         logger.warning(f"KeyBERT topic extraction failed: {e}")
         return []
 
-def extract_topics_with_bertopic(text, model):
-    """Extract topics using BERTopic"""
+def extract_topics_with_bertopic(text, model, encoded_data=None):
+    """Extract topics using BERTopic with optional pre-computed sentence transformer embeddings"""
     try:
         from nltk.tokenize import sent_tokenize
-        sentences = sent_tokenize(text)
-        if len(sentences) < 2:
-            return []
         
-        topics, probs = model.fit_transform(sentences)
+        if encoded_data and encoded_data.get('embeddings') is not None:
+            logger.info("Using pre-computed sentence transformer embeddings for BERTopic")
+            sentences = encoded_data['sentences']
+            embeddings = encoded_data['embeddings']
+            
+            if len(sentences) < 2:
+                return []
+            
+            topics, probs = model.fit_transform(sentences, embeddings=embeddings)
+        else:
+            logger.info("Using text-based approach for BERTopic (no pre-computed embeddings)")
+            sentences = sent_tokenize(text)
+            if len(sentences) < 2:
+                return []
+            
+            topics, probs = model.fit_transform(sentences)
+        
         topic_info = model.get_topic_info()
         
         valid_topics = topic_info[topic_info.Topic != -1].head(5)
@@ -402,8 +426,8 @@ def extract_topics_with_bertopic(text, model):
         logger.warning(f"BERTopic topic extraction failed: {e}")
         return []
 
-def extract_topics_with_openai_embeddings(text):
-    """Extract topics using OpenAI embeddings (if API key available)"""
+def extract_topics_with_openai_embeddings(text, encoded_data=None):
+    """Extract topics using OpenAI embeddings with optional sentence transformer preprocessing"""
     try:
         import openai
         import os
@@ -422,11 +446,19 @@ def extract_topics_with_openai_embeddings(text):
         except ImportError:
             client = openai.OpenAI(api_key=api_key)
         
+        if encoded_data and encoded_data.get('sentences'):
+            logger.info("Using sentence transformer preprocessing for OpenAI topic extraction")
+            sentences = encoded_data['sentences'][:10]  # Top 10 sentences
+            processed_text = ' '.join(sentences)[:2000]  # Limit text length
+        else:
+            logger.info("Using original text for OpenAI topic extraction")
+            processed_text = text[:2000]  # Limit text length
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Extract 3-5 main topics from the following text. Return only topic names separated by commas, no explanations."},
-                {"role": "user", "content": text[:2000]}  # Limit text length
+                {"role": "user", "content": processed_text}
             ],
             max_tokens=100,
             temperature=0.3
@@ -440,29 +472,129 @@ def extract_topics_with_openai_embeddings(text):
         logger.warning(f"OpenAI embeddings topic extraction failed: {e}")
         return []
 
+def encode_text_with_sentence_transformers(text):
+    """Encode text using sentence transformers to create embeddings"""
+    try:
+        if not embedding_models.get('sentence_transformer'):
+            logger.warning("SentenceTransformer model not available for encoding")
+            return None
+        
+        model = embedding_models['sentence_transformer']
+        
+        from nltk.tokenize import sent_tokenize
+        sentences = sent_tokenize(text)
+        
+        if len(sentences) > 50:
+            sentences = sentences[:50]
+            logger.info(f"Limited encoding to first 50 sentences out of {len(sent_tokenize(text))}")
+        
+        embeddings = model.encode(sentences, convert_to_tensor=False)
+        
+        logger.info(f"Successfully encoded {len(sentences)} sentences using SentenceTransformer")
+        logger.info(f"Embedding shape: {embeddings.shape if hasattr(embeddings, 'shape') else f'{len(embeddings)} embeddings'}")
+        
+        return {
+            'sentences': sentences,
+            'embeddings': embeddings,
+            'model_name': 'all-MiniLM-L6-v2'
+        }
+        
+    except Exception as e:
+        logger.warning(f"Failed to encode text with SentenceTransformer: {e}")
+        return None
+
+def extract_topics_with_sentence_transformer_clustering(encoded_data):
+    """Extract topics using sentence transformer embeddings with clustering"""
+    try:
+        if not encoded_data or not encoded_data.get('embeddings') is not None:
+            return []
+        
+        import numpy as np
+        from sklearn.cluster import KMeans
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from collections import Counter
+        import re
+        
+        sentences = encoded_data['sentences']
+        embeddings = np.array(encoded_data['embeddings'])
+        
+        n_sentences = len(sentences)
+        n_clusters = min(max(3, n_sentences // 10), 7)
+        
+        logger.info(f"Clustering {n_sentences} sentences into {n_clusters} topic clusters")
+        
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(embeddings)
+        
+        topics = []
+        for cluster_id in range(n_clusters):
+            cluster_sentences = [sentences[i] for i, label in enumerate(cluster_labels) if label == cluster_id]
+            
+            if not cluster_sentences:
+                continue
+            
+            cluster_text = ' '.join(cluster_sentences)
+            
+            vectorizer = TfidfVectorizer(
+                max_features=20,
+                stop_words='english',
+                ngram_range=(1, 2),
+                min_df=1
+            )
+            
+            try:
+                tfidf_matrix = vectorizer.fit_transform([cluster_text])
+                feature_names = vectorizer.get_feature_names_out()
+                tfidf_scores = tfidf_matrix.toarray()[0]
+                
+                top_indices = np.argsort(tfidf_scores)[-3:][::-1]  # Top 3 terms
+                cluster_terms = [feature_names[i] for i in top_indices if tfidf_scores[i] > 0]
+                
+                if cluster_terms:
+                    topic_name = ' '.join(cluster_terms).title()
+                    topics.append(topic_name)
+                    
+            except Exception as cluster_error:
+                logger.warning(f"Failed to extract terms for cluster {cluster_id}: {cluster_error}")
+                continue
+        
+        logger.info(f"Extracted {len(topics)} topics using SentenceTransformer clustering: {topics}")
+        return topics[:5]  # Return top 5 topics
+        
+    except Exception as e:
+        logger.warning(f"SentenceTransformer clustering topic extraction failed: {e}")
+        return []
+
 def extract_topics_from_text(text):
-    """Extract relevant topics from transcribed text using advanced embedding methods with fallbacks"""
+    """Extract relevant topics from transcribed text using sentence transformers encoding as preprocessing for all methods"""
     if not text or len(text.strip()) < 10:
         return []
     
-    logger.info("Starting topic extraction with embedding methods")
+    logger.info("Starting topic extraction with SentenceTransformer encoding preprocessing")
     
+    encoded_data = encode_text_with_sentence_transformers(text)
     
-    topics = extract_topics_with_openai_embeddings(text)
+    if encoded_data:
+        topics = extract_topics_with_sentence_transformer_clustering(encoded_data)
+        if topics:
+            logger.info(f"Successfully extracted topics using SentenceTransformer clustering: {topics}")
+            return topics
+    
+    topics = extract_topics_with_openai_embeddings(text, encoded_data)
     if topics:
-        logger.info(f"Successfully extracted topics using OpenAI: {topics}")
+        logger.info(f"Successfully extracted topics using OpenAI with SentenceTransformer preprocessing: {topics}")
         return topics
     
     if embedding_models.get('keybert'):
-        topics = extract_topics_with_keybert(text, embedding_models['keybert'])
+        topics = extract_topics_with_keybert(text, embedding_models['keybert'], encoded_data)
         if topics:
-            logger.info(f"Successfully extracted topics using KeyBERT: {topics}")
+            logger.info(f"Successfully extracted topics using KeyBERT with SentenceTransformer embeddings: {topics}")
             return topics
     
     if embedding_models.get('bertopic') and len(text.split()) > 50:
-        topics = extract_topics_with_bertopic(text, embedding_models['bertopic'])
+        topics = extract_topics_with_bertopic(text, embedding_models['bertopic'], encoded_data)
         if topics:
-            logger.info(f"Successfully extracted topics using BERTopic: {topics}")
+            logger.info(f"Successfully extracted topics using BERTopic with SentenceTransformer embeddings: {topics}")
             return topics
     
     logger.info("Falling back to NLTK/TF-IDF topic extraction")
