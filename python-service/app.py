@@ -443,9 +443,14 @@ def analyze_video():
             return jsonify({'error': 'File type not supported'}), 400
         
         filename = secure_filename(file.filename)
-        storage_dir = r"C:\Ankit"
+        
+        if os.name == 'nt':  # Windows
+            storage_dir = r"C:\Ankit"
+        else:  # Linux/Unix - create equivalent directory structure
+            storage_dir = os.path.join(os.getcwd(), "Ankit")
         
         os.makedirs(storage_dir, exist_ok=True)
+        logger.info(f"Using storage directory: {storage_dir} (OS: {os.name})")
         
         temp_file_path = os.path.join(storage_dir, filename)
         file.save(temp_file_path)
@@ -454,20 +459,54 @@ def analyze_video():
         
         try:
             logger.info("Extracting audio from video using moviepy...")
-            video_clip = VideoFileClip(temp_file_path)
+            logger.info(f"Video file path: {temp_file_path}")
+            logger.info(f"Video file exists: {os.path.exists(temp_file_path)}")
+            logger.info(f"Video file size: {os.path.getsize(temp_file_path) if os.path.exists(temp_file_path) else 'N/A'} bytes")
+            
+            try:
+                video_clip = VideoFileClip(temp_file_path)
+                logger.info("VideoFileClip loaded successfully")
+            except Exception as e:
+                logger.error(f"Failed to load video file with VideoFileClip: {e}")
+                return jsonify({'error': f'Failed to load video file: {str(e)}'}), 400
             
             if video_clip.audio is None:
                 video_clip.close()
                 return jsonify({'error': 'Video file does not contain an audio track'}), 400
             
             audio_temp_path = os.path.join(storage_dir, f"audio_{filename.rsplit('.', 1)[0]}.wav")
-            video_clip.audio.write_audiofile(audio_temp_path, logger=None)
-            video_clip.close()
+            logger.info(f"Audio file path: {audio_temp_path}")
+            logger.info(f"Audio directory exists: {os.path.exists(os.path.dirname(audio_temp_path))}")
             
-            logger.info("Audio extraction completed, starting transcription with whisper...")
+            try:
+                video_clip.audio.write_audiofile(audio_temp_path, logger=None)
+                video_clip.close()
+                logger.info("Audio extraction completed")
+            except Exception as e:
+                video_clip.close()
+                logger.error(f"Failed to extract audio with write_audiofile: {e}")
+                return jsonify({'error': f'Failed to extract audio: {str(e)}'}), 400
             
-            result = model.transcribe(audio_temp_path)
-            transcribed_text = result["text"]
+            logger.info(f"Audio file exists: {os.path.exists(audio_temp_path)}")
+            logger.info(f"Audio file size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
+            
+            if not os.path.exists(audio_temp_path):
+                logger.error(f"Audio file was not created: {audio_temp_path}")
+                return jsonify({'error': 'Audio extraction failed - file not created'}), 500
+            
+            logger.info("Starting transcription with whisper...")
+            logger.info(f"Whisper model type: {type(model)}")
+            logger.info(f"Audio file path: {audio_temp_path}")
+            logger.info(f"Audio file exists: {os.path.exists(audio_temp_path)}")
+            logger.info(f"Audio file size: {os.path.getsize(audio_temp_path) if os.path.exists(audio_temp_path) else 'N/A'} bytes")
+            
+            try:
+                result = model.transcribe(audio_temp_path)
+                transcribed_text = result["text"]
+                logger.info("Transcription completed successfully")
+            except Exception as e:
+                logger.error(f"Failed to transcribe audio with Whisper: {e}")
+                return jsonify({'error': f'Transcription failed: {str(e)}'}), 500
             
             topics = extract_topics_from_text(transcribed_text)
             
