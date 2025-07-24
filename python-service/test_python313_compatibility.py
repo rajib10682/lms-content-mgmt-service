@@ -2,7 +2,7 @@
 
 import sys
 import subprocess
-import pkg_resources
+import importlib.metadata
 import tempfile
 import os
 
@@ -31,6 +31,29 @@ def test_dependency_installation():
         print(f"✗ Error testing dependency installation: {e}")
         return False
 
+def test_installed_packages():
+    """Test that required packages are properly installed"""
+    print("\nTesting installed packages...")
+    
+    required_packages = [
+        'flask', 'openai-whisper', 'torch', 'torchaudio', 
+        'werkzeug', 'numpy', 'nltk', 'scikit-learn', 'spacy', 'numba', 'moviepy'
+    ]
+    
+    all_passed = True
+    for package in required_packages:
+        try:
+            version = importlib.metadata.version(package)
+            print(f"✓ {package} version {version} is installed")
+        except importlib.metadata.PackageNotFoundError:
+            print(f"✗ {package} is not installed")
+            all_passed = False
+        except Exception as e:
+            print(f"✗ Error checking {package}: {e}")
+            all_passed = False
+    
+    return all_passed
+
 def test_imports():
     """Test that all critical imports work"""
     print("\nTesting critical imports...")
@@ -44,7 +67,8 @@ def test_imports():
         ('numpy', 'array'),
         ('nltk', 'download'),
         ('sklearn.feature_extraction.text', 'TfidfVectorizer'),
-        ('spacy', 'load')
+        ('spacy', 'load'),
+        ('moviepy', 'VideoFileClip')
     ]
     
     all_passed = True
@@ -100,12 +124,17 @@ def test_nltk_resources():
         return False
 
 def test_topic_extraction():
-    """Test the AI-based topic extraction functionality"""
-    print("\nTesting AI-based topic extraction...")
+    """Test the AI-based topic extraction functionality including embeddings"""
+    print("\nTesting AI-based topic extraction with embeddings...")
     
     try:
         sys.path.insert(0, os.path.dirname(__file__))
-        from app import extract_topics_from_text
+        from app import extract_topics_from_text, embedding_models
+        
+        print(f"Embedding models loaded: {list(embedding_models.keys())}")
+        for model_name, embedding_model in embedding_models.items():
+            status = "✓ loaded" if embedding_model is not None else "✗ failed"
+            print(f"  {model_name}: {status}")
         
         test_cases = [
             {
@@ -187,6 +216,7 @@ if __name__ == "__main__":
     
     tests = [
         ("Dependency Installation", test_dependency_installation),
+        ("Installed Packages", test_installed_packages),
         ("Critical Imports", test_imports),
         ("NLTK Resources", test_nltk_resources),
         ("Topic Extraction", test_topic_extraction),

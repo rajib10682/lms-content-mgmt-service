@@ -1,3 +1,4 @@
+# Minimal requirements without BERTopic (for systems with build issues)
 flask>=3.1.0
 openai-whisper>=20250625
 torch>=2.7.0
@@ -12,7 +13,3 @@ moviepy>=1.0.3
 sentence-transformers>=3.3.0
 keybert>=0.8.5
 openai>=1.58.1
-# BERTopic with hdbscan dependency (may require build tools)
-# If installation fails, use requirements-minimal.txt or see INSTALLATION.md
-# Alternative: conda install -c conda-forge hdbscan && pip install bertopic
-bertopic>=0.16.4
